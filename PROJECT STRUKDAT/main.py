@@ -1,7 +1,9 @@
-# main.py
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 from maxheap import MaxHeap
+import csv
+import os
+
 
 class NilaiEditorPopup(tk.Toplevel):
     """Popup editor nilai (Treeview) — tambah / edit / hapus nilai per siswa."""
@@ -12,7 +14,7 @@ class NilaiEditorPopup(tk.Toplevel):
         self.resizable(False, False)
         self.parent = parent
 
-        self.nilai_list = list(nilai_list)  # salinan
+        self.nilai_list = list(nilai_list)  
 
         # Treeview untuk menampilkan nilai
         cols = ("index", "nilai")
@@ -88,7 +90,6 @@ class NilaiEditorPopup(tk.Toplevel):
         self.populate_tree()
 
     def simpan(self):
-        # kembalikan daftar nilai ke pemanggil
         self.result = self.nilai_list
         self.destroy()
 
@@ -167,11 +168,29 @@ class KategoriEditorPopup(tk.Toplevel):
 class AplikasiRataMapel:
     def __init__(self, root):
         self.root = root
+        self.root.title("Hitung Rata-Rata Mapel - MaxHeap (Dilengkapi Editor)")
+        self.root.geometry("980x650")
+        self.root.configure(bg="#f0f2f5")
 
+        self.records_rata = {}          
+        self.records_kategori = {}      
+        self.kategori_kkm = {}         
+
+        self.heap_rata = MaxHeap()
+        self.heap_per_kelas = {}
+        self.heap_kategori_global = {}
+        self.heap_kategori_per_kelas = {}
+
+        self.current_selected = None
+
+        self.load_rata_from_csv()
+        self.load_kategori_from_csv()
+        self.rebuild_heaps_rata()
+        self.rebuild_heaps_kategori()
         style = ttk.Style()
         style.theme_use("default")
 
-        style.configure("Treeview", 
+        style.configure("Treeview",
                         rowheight=25,
                         bordercolor="#d9d9d9",
                         borderwidth=1,
@@ -183,37 +202,16 @@ class AplikasiRataMapel:
                         relief="solid")
 
         style.map("Treeview", background=[("selected", "#cce6ff")])
-
-        style.layout("Treeview", [
-            ("Treeview.treearea", {"sticky": "nswe"})
-        ])
+        style.layout("Treeview", [("Treeview.treearea", {"sticky": "nswe"})])
 
         self.frame_menu = tk.Frame(root, bg="#f0f2f5")
         self.frame_rata = tk.Frame(root, bg="#f0f2f5")
         self.frame_kategori = tk.Frame(root, bg="#f0f2f5")
-
-        self.root.title("Hitung Rata-Rata Mapel - MaxHeap (Dilengkapi Editor)")
-        self.root.geometry("980x650")
-        self.root.configure(bg="#f0f2f5")
-
-        # Heap utama untuk nilai rata-rata
-        self.heap_rata = MaxHeap()
-        self.heap_per_kelas = {}
-        self.heap_kategori_global = {}
-        self.heap_kategori_per_kelas = {}
-
-        # DATA UTAMA (sumber kebenaran). Kita rebuild heaps dari these.
-        # key: (nama_lower, kelas) -> record
-        self.records_rata = {}
-        # key: (mapel_lower, nama_lower, kelas) -> record
-        self.records_kategori = {}
-
-        # Temp store for currently selected siswa (for update/delete)
-        self.current_selected = None  # tuple: ("rata", key) or ("kategori", key)
+        self.frame_lihat = tk.Frame(root, bg="#f0f2f5")
 
         self.show_menu()
 
-    # ---------------- Menu / navigasi ----------------
+    # Menu 
     def open_kategori(self):
         self.frame_menu.pack_forget()
         self.frame_kategori.pack(fill="both", expand=True)
@@ -223,6 +221,14 @@ class AplikasiRataMapel:
         self.frame_menu.pack_forget()
         self.frame_rata.pack(fill="both", expand=True)
         self.setup_ui_rata_mapel()
+
+    def open_lihat_peringkat(self):
+        self.frame_menu.pack_forget()
+        self.frame_rata.pack_forget()
+        self.frame_kategori.pack_forget()
+
+        self.frame_lihat.pack(fill="both", expand=True)
+        self.setup_ui_lihat()
 
     def show_menu(self):
         for f in (self.frame_rata, self.frame_kategori):
@@ -239,56 +245,54 @@ class AplikasiRataMapel:
                 font=("Segoe UI", 12),
                 bg="#f0f2f5").pack(pady=10)
 
-        tk.Button(self.frame_menu, text="Peringkat Berdasarkan Kategori",
+        tk.Button(self.frame_menu, text="Peringkat Setiap Pelajaran",
                 font=("Segoe UI", 12), width=30,
                 command=self.open_kategori).pack(pady=10)
-        tk.Button(self.frame_menu, text="Peringkat Berdasarkan Mapel",
+        tk.Button(self.frame_menu, text="Peringkat Seluruh Pelajaran",
                 font=("Segoe UI", 12), width=30,
                 command=self.open_rata_mapel).pack(pady=20)
+        tk.Button(self.frame_menu, text="Lihat Peringkat",
+                font=("Segoe UI", 12), width=30,
+                command=self.open_lihat_peringkat).pack(pady=10)
 
-    # ---------------- UI Rata-mapel ----------------
+
+    # UI Rata-mapel 
     def setup_ui_rata_mapel(self):
         for w in self.frame_rata.winfo_children():
             w.destroy()
 
         header = tk.Frame(self.frame_rata, bg="#343a40", pady=15)
         header.pack(fill="x")
-        tk.Label(header, text="Pemeringkatan Berdasarkan Nilai Mapel",
+        tk.Label(header, text="Pemeringkatan Berdasarkan Nilai Seluruh Mapel",
                  font=("Segoe UI", 16, "bold"), bg="#343a40", fg="white").pack()
 
         main_frame = tk.Frame(self.frame_rata, bg="#f0f2f5")
         main_frame.pack(fill="both", expand=True, padx=20, pady=20)
 
-        left_panel = tk.LabelFrame(main_frame, text="Input Siswa", padx=15, pady=15,
+        left_panel = tk.LabelFrame(main_frame, text="Input Nilai Semua Mapel", padx=15, pady=15,
                                    bg="white", font=("Segoe UI", 11, "bold"))
         left_panel.pack(side="left", fill="y")
 
-        # Nama
         tk.Label(left_panel, text="Nama:", bg="white").pack(anchor="w")
         self.entry_nama = ttk.Entry(left_panel, width=25)
         self.entry_nama.pack()
 
-        # Kelas
         tk.Label(left_panel, text="Kelas:", bg="white").pack(anchor="w")
         self.entry_kelas = ttk.Entry(left_panel, width=25)
         self.entry_kelas.pack()
 
-        # Jumlah Mapel (dipakai untuk buat placeholder, optional)
         tk.Label(left_panel, text="Jumlah Mapel:", bg="white").pack(anchor="w")
         self.entry_jumlah_mapel = ttk.Entry(left_panel, width=25)
         self.entry_jumlah_mapel.pack()
 
         ttk.Button(left_panel, text="Buat Input Mapel", command=self.generate_mapel_input).pack(pady=5)
 
-        # mapel_frame dipakai bila menggunakan input individual; kita tetap sediakan kosong.
         self.mapel_frame = tk.Frame(left_panel, bg="white")
         self.mapel_frame.pack(fill="x", pady=10)
         self.mapel_entries = []
 
-        # Tombol untuk buka popup editor nilai
         ttk.Button(left_panel, text="Edit Nilai", command=self.open_popup_nilai_from_form).pack(pady=5)
 
-        # Action buttons
         btn_frame = tk.Frame(left_panel, bg="white")
         btn_frame.pack(pady=6)
         ttk.Button(btn_frame, text="Input", command=self.hitung_dan_tambah).grid(row=0, column=0, padx=4)
@@ -297,15 +301,16 @@ class AplikasiRataMapel:
 
         ttk.Separator(left_panel).pack(fill="x", pady=8)
 
-        # Mode ranking
-        tk.Label(left_panel, text="Mode Ranking:", bg="white").pack(anchor="w")
+        tk.Label(left_panel, text="Mode Peringkat:", bg="white").pack(anchor="w")
         self.mode_var = tk.StringVar(value="Global")
 
         tk.Radiobutton(left_panel, text="Global", variable=self.mode_var,
-                       value="Global", bg="white", command=self.refresh_table).pack(anchor="w")
+                    value="Global", bg="white",
+                    command=self.on_mode_change).pack(anchor="w")
 
         tk.Radiobutton(left_panel, text="Per Kelas", variable=self.mode_var,
-               value="PerKelas", bg="white", command=self.on_mode_change).pack(anchor="w")
+                    value="PerKelas", bg="white",
+                    command=self.on_mode_change).pack(anchor="w")
 
         self.kelas_var = tk.StringVar()
         self.dropdown_kelas = ttk.Combobox(left_panel, textvariable=self.kelas_var,
@@ -313,29 +318,31 @@ class AplikasiRataMapel:
         self.dropdown_kelas.pack(pady=5)
         self.dropdown_kelas.bind("<<ComboboxSelected>>", lambda e: self.refresh_table())
 
-        # Right panel (table)
-        right_panel = tk.LabelFrame(main_frame, text="Ranking Siswa", bg="white",
+        right_panel = tk.LabelFrame(main_frame, text="Peringkat Nilai", bg="white",
                                     font=("Segoe UI", 11, "bold"))
         right_panel.pack(side="right", fill="both", expand=True)
 
-        cols = ("rank", "nama", "kelas", "nilai", "status")
+        cols = ("nama", "kelas", "nilai", "rank")
         self.tree = ttk.Treeview(right_panel, columns=cols, show="headings")
-        for c, t in zip(cols, ("Rangking","Nama","Kelas","Nilai Rata2","Status")):
-            self.tree.heading(c, text=t)
-        self.tree.column("rank", width=50, anchor="center")
+
+        self.tree.heading("nama", text="Nama")
+        self.tree.heading("kelas", text="Kelas")
+        self.tree.heading("nilai", text="Nilai")
+        self.tree.heading("rank", text="Ranking")
+
         self.tree.column("nama", width=150)
         self.tree.column("kelas", width=80, anchor="center")
-        self.tree.column("nilai", width=100, anchor="center")
-        self.tree.column("status", width=100, anchor="center")
+        self.tree.column("nilai", width=80, anchor="center")
+        self.tree.column("rank", width=80, anchor="center")
+
         self.tree.pack(fill="both", expand=True, padx=5, pady=5)
 
-        # bind select
         self.tree.bind("<<TreeviewSelect>>", self.on_select_rata)
-
-        # ensure table shows current data
+        self.update_dropdown()
+        self.on_mode_change()
         self.refresh_table()
 
-    # ---------------- UI Kategori ----------------
+    # UI per mapel
     def setup_ui_kategori_mapel(self):
         for w in self.frame_kategori.winfo_children():
             w.destroy()
@@ -348,7 +355,7 @@ class AplikasiRataMapel:
         main = tk.Frame(self.frame_kategori, bg="#f0f2f5")
         main.pack(fill="both", expand=True, padx=20, pady=20)
 
-        left = tk.LabelFrame(main, text="Input Nilai per Kategori", bg="white",
+        left = tk.LabelFrame(main, text="Input Nilai per Mapel", bg="white",
                             font=("Segoe UI", 11, "bold"), padx=15, pady=15)
         left.pack(side="left", fill="y")
 
@@ -364,13 +371,16 @@ class AplikasiRataMapel:
         self.kat_mapel = ttk.Entry(left, width=25)
         self.kat_mapel.pack()
 
-        tk.Label(left, text="Jumlah Input:", bg="white").pack(anchor="w")
+        tk.Label(left, text="Jumlah Kategori:", bg="white").pack(anchor="w")
         self.entry_jumlah_kategori = ttk.Entry(left, width=25)
         self.entry_jumlah_kategori.pack()
 
         ttk.Button(left, text="Buat Input Kategori", command=self.generate_kategori_input).pack(pady=5)
 
-        # kategori frame
+        tk.Label(left, text="KKM:", bg="white").pack(anchor="w")
+        self.entry_kkm_kat = ttk.Entry(left, width=10)
+        self.entry_kkm_kat.pack(pady=5)
+
         self.kategori_frame = tk.Frame(left, bg="white")
         self.kategori_frame.pack(fill="x", pady=10)
         self.kategori_entries = []
@@ -385,7 +395,7 @@ class AplikasiRataMapel:
 
         ttk.Separator(left).pack(fill="x", pady=10)
 
-        tk.Label(left, text="Mode Ranking:", bg="white").pack(anchor="w")
+        tk.Label(left, text="Mode Peringkat:", bg="white").pack(anchor="w")
         self.mode_kat_var = tk.StringVar(value="Global")
 
         tk.Radiobutton(left, text="Global", variable=self.mode_kat_var,
@@ -408,21 +418,98 @@ class AplikasiRataMapel:
         self.dropdown_kelas_kat.pack(pady=5)
         self.dropdown_kelas_kat.bind("<<ComboboxSelected>>", lambda e: self.refresh_tabel_kategori())
 
-        right = tk.LabelFrame(main, text="Ranking Nilai Kategori", bg="white",
+        right = tk.LabelFrame(main, text="Peringkat Nilai Setiap Mapel", bg="white",
                             font=("Segoe UI", 11, "bold"))
         right.pack(side="right", fill="both", expand=True)
 
-        cols = ("mapel", "rank", "nama", "kelas", "nilai")
+        cols = ("mapel", "rank", "nama", "kelas", "nilai", "status")
         self.tree_kategori = ttk.Treeview(right, columns=cols, show="headings")
-        for c, t in zip(cols, ("Mapel","Rank","Nama","Kelas","Nilai")):
-            self.tree_kategori.heading(c, text=t)
+
+        self.tree_kategori.heading("mapel", text="Mapel")
+        self.tree_kategori.heading("rank", text="Peringkat")
+        self.tree_kategori.heading("nama", text="Nama")
+        self.tree_kategori.heading("kelas", text="Kelas")
+        self.tree_kategori.heading("nilai", text="Nilai")
+        self.tree_kategori.heading("status", text="Status")
+
+        self.tree_kategori.column("mapel", width=120)
+        self.tree_kategori.column("rank", width=60, anchor="center")
+        self.tree_kategori.column("nama", width=150)
+        self.tree_kategori.column("kelas", width=80, anchor="center")
+        self.tree_kategori.column("nilai", width=80, anchor="center")
+        self.tree_kategori.column("status", width=90, anchor="center")
+
         self.tree_kategori.pack(fill="both", expand=True, padx=5, pady=5)
 
         self.tree_kategori.bind("<<TreeviewSelect>>", self.on_select_kategori)
-
+        self.update_dropdown_kategori()
+        self.on_mode_change_kategori()
         self.refresh_tabel_kategori()
 
-    # ---------------- Generate inputs (optional) ----------------
+    def setup_ui_lihat(self):
+        for w in self.frame_lihat.winfo_children():
+            w.destroy()
+
+        header = tk.Frame(self.frame_lihat, bg="#343a40", pady=15)
+        header.pack(fill="x")
+        tk.Label(header, text="Lihat Peringkat Nilai",
+                font=("Segoe UI", 16, "bold"), bg="#343a40", fg="white").pack()
+
+        main = tk.Frame(self.frame_lihat, bg="#f0f2f5")
+        main.pack(fill="both", expand=True, padx=20, pady=20)
+
+        left = tk.LabelFrame(main, text="Mode Lihat Data", bg="white",
+                            font=("Segoe UI", 11, "bold"), padx=15, pady=15)
+        left.pack(side="left", fill="y")
+
+        tk.Label(left, text="Mode:", bg="white").pack(anchor="w")
+
+        self.lihat_mode = tk.StringVar(value="Global")
+
+        tk.Radiobutton(left, text="Global", bg="white",
+                    variable=self.lihat_mode, value="Global",
+                    command=self.refresh_tabel_lihat).pack(anchor="w")
+
+        tk.Radiobutton(left, text="Per Kelas", bg="white",
+                    variable=self.lihat_mode, value="PerKelas",
+                    command=self.refresh_tabel_lihat).pack(anchor="w")
+
+        self.lihat_kelas_var = tk.StringVar()
+        self.dropdown_lihat_kelas = ttk.Combobox(left, width=20,
+                                                textvariable=self.lihat_kelas_var,
+                                                state="disabled")
+        self.dropdown_lihat_kelas.pack(pady=5)
+
+        self.dropdown_lihat_kelas.bind("<<ComboboxSelected>>",
+                                    lambda e: self.refresh_tabel_lihat())
+
+        right = tk.LabelFrame(main, text="Peringkat Nilai", bg="white",
+                            font=("Segoe UI", 11, "bold"))
+        right.pack(side="right", fill="both", expand=True)
+
+        cols = ("nama", "kelas", "nilai", "rank")
+        self.tree_lihat = ttk.Treeview(right, columns=cols, show="headings")
+
+        self.tree_lihat.heading("nama", text="Nama")
+        self.tree_lihat.heading("kelas", text="Kelas")
+        self.tree_lihat.heading("nilai", text="Nilai")
+        self.tree_lihat.heading("rank", text="Rank")
+
+        self.tree_lihat.column("nama", width=150)
+        self.tree_lihat.column("kelas", width=80, anchor="center")
+        self.tree_lihat.column("nilai", width=80, anchor="center")
+        self.tree_lihat.column("rank", width=80, anchor="center")
+
+        self.tree_lihat.pack(fill="both", expand=True, padx=5, pady=5)
+
+        kelas_list = sorted(self.heap_per_kelas.keys())
+        self.dropdown_lihat_kelas["values"] = kelas_list
+        if kelas_list:
+            self.lihat_kelas_var.set(kelas_list[0])
+
+        self.refresh_tabel_lihat()
+
+    # Generate inputs 
     def generate_mapel_input(self):
         for widget in self.mapel_frame.winfo_children():
             widget.destroy()
@@ -471,16 +558,13 @@ class AplikasiRataMapel:
 
             entry_bobot = ttk.Entry(baris, width=8)
             entry_bobot.pack(side="left", padx=5)
-            entry_bobot.insert(0, "0")   # default 0%
+            entry_bobot.insert(0, "0")   
 
             self.kategori_entries.append((entry_nama, entry_nilai, entry_bobot))
-
-
             
-    # ---------------- Popup openers ----------------
+    # Popup openers 
     def open_popup_nilai_from_form(self):
         """Buka popup editor dan simpan hasil di self._popup_nilai_list (for rata mode)."""
-        # build nilai list from mapel_entries if present, else try to get from existing selected record
         nilai_list = []
         if getattr(self, "mapel_entries", None):
             for en_name, en_nilai in self.mapel_entries:
@@ -492,7 +576,6 @@ class AplikasiRataMapel:
                     except:
                         messagebox.showerror("Error", "Nilai mapel harus angka 0-100!")
                         return
-        # if we have currently selected rata record, prefer its nilai list
         if self.current_selected and self.current_selected[0] == "rata":
             key = self.current_selected[1]
             if key in self.records_rata:
@@ -502,17 +585,14 @@ class AplikasiRataMapel:
         self.root.wait_window(popup)
         if hasattr(popup, "result") and popup.result is not None:
             self._popup_nilai_list = popup.result
-            # show brief info
             messagebox.showinfo("Sukses", f"Nilai tersimpan ({len(self._popup_nilai_list)} item).")
         else:
-            # canceled
             pass
 
     def open_popup_kategori_from_form(self):
         nilai_list = []
         bobot_list = []
 
-        # Ambil data dari entry
         if getattr(self, "kategori_entries", None):
             for en_nama, en_nilai, en_bobot in self.kategori_entries:
                 val = en_nilai.get().strip()
@@ -526,7 +606,6 @@ class AplikasiRataMapel:
                         messagebox.showerror("Error", "Nilai & bobot harus angka!")
                         return
 
-        # Jika user memilih record sebelumnya
         if self.current_selected and self.current_selected[0] == "kategori":
             key = self.current_selected[1]
             if key in self.records_kategori:
@@ -542,15 +621,14 @@ class AplikasiRataMapel:
             messagebox.showinfo("Sukses", "Nilai & bobot berhasil disimpan.")
 
 
-    # ---------------- Add / Update / Delete Rata ----------------
+    # Add / Update / Delete Rata 
     def hitung_dan_tambah(self):
         nama = self.entry_nama.get().strip()
-        kelas = self.entry_kelas.get().strip()
+        kelas = self.entry_kelas.get().strip().lower()
         if not nama or not kelas:
             messagebox.showerror("Error", "Nama dan Kelas wajib diisi!")
             return
 
-        # collect nilai: prefer popup list if exists, else mapel_entries
         nilai_mapel = []
         if hasattr(self, "_popup_nilai_list"):
             nilai_mapel = list(self._popup_nilai_list)
@@ -571,9 +649,8 @@ class AplikasiRataMapel:
             return
 
         rata = sum(nilai_mapel) / len(nilai_mapel)
-        key = (nama.lower(), kelas)
+        key = (nama.lower(), kelas.lower())
 
-        # simpan ke records_rata (sumber kebenaran)
         self.records_rata[key] = {
             "nama": nama,
             "kelas": kelas,
@@ -581,12 +658,13 @@ class AplikasiRataMapel:
             "rata": rata
         }
 
-        # rebuild heaps from records
         self.rebuild_heaps_rata()
 
         self.update_dropdown()
         self.refresh_table()
+        self.save_rata_to_csv()
         messagebox.showinfo("Berhasil", f"Rata-rata {nama} = {rata:.2f} berhasil ditambahkan.")
+
 
     def handle_update_rata(self):
         if not self.current_selected or self.current_selected[0] != "rata":
@@ -597,7 +675,6 @@ class AplikasiRataMapel:
             messagebox.showerror("Error", "Data tidak ditemukan.")
             return
 
-        # Ambil input terbaru dari form (nama, kelas) dan popup nilai jika ada
         nama_baru = self.entry_nama.get().strip()
         kelas_baru = self.entry_kelas.get().strip()
         if not nama_baru or not kelas_baru:
@@ -607,7 +684,6 @@ class AplikasiRataMapel:
         if hasattr(self, "_popup_nilai_list"):
             nilai_baru = list(self._popup_nilai_list)
         else:
-            # try mapel_entries
             nilai_baru = []
             for entry_nama, entry_nilai in getattr(self, "mapel_entries", []):
                 txt = entry_nilai.get().strip()
@@ -625,29 +701,26 @@ class AplikasiRataMapel:
 
         rata_baru = sum(nilai_baru) / len(nilai_baru)
 
-        # delete old record (key may have changed if user edits name/kelas)
-        # remove old key then insert new
         try:
             del self.records_rata[key]
         except KeyError:
             pass
 
-        new_key = (nama_baru.lower(), kelas_baru)
+        new_key = (nama_baru.lower(), kelas_baru.lower())
         self.records_rata[new_key] = {
             "nama": nama_baru,
-            "kelas": kelas_baru,
+            "kelas": kelas_baru.lower(),
             "nilai": list(nilai_baru),
             "rata": rata_baru
         }
 
-        # reset current popup cache
         if hasattr(self, "_popup_nilai_list"):
             del self._popup_nilai_list
 
-        # rebuild
         self.rebuild_heaps_rata()
         self.update_dropdown()
         self.refresh_table()
+        self.save_rata_to_csv()
         messagebox.showinfo("Berhasil", f"Data {nama_baru} berhasil diupdate.")
 
     def handle_delete_rata(self):
@@ -663,23 +736,31 @@ class AplikasiRataMapel:
         if not confirm:
             return
         del self.records_rata[key]
-        # also clear popup cache if it was that record
         if hasattr(self, "_popup_nilai_list"):
             del self._popup_nilai_list
         self.rebuild_heaps_rata()
         self.update_dropdown()
         self.refresh_table()
+        self.save_rata_to_csv()
         messagebox.showinfo("Berhasil", f"Data {nama} berhasil dihapus.")
 
-    # ---------------- Add / Update / Delete Kategori ----------------
+    # Add / Update / Delete Kategori 
     def hitung_kategori(self):
+        try:
+            kkm = float(self.entry_kkm_kat.get())
+        except:
+            messagebox.showerror("Error", "KKM harus berupa angka!")
+            return
+
         nama = self.kat_nama.get().strip()
-        kelas = self.kat_kelas.get().strip()
+        kelas = self.kat_kelas.get().strip().lower()
         mapel = self.kat_mapel.get().strip()
 
         if not nama or not kelas or not mapel:
-            messagebox.showerror("Error", "Nama, Kelas, Mapel wajib diisi!")
+            messagebox.showerror("Error", "Nama, Kelas, dan Mapel wajib diisi!")
             return
+
+        self.kategori_kkm[mapel] = kkm
 
         nilai_list = []
         bobot_list = []
@@ -696,19 +777,17 @@ class AplikasiRataMapel:
                         nilai_list.append(float(v))
                         bobot_list.append(float(b))
                     except:
-                        messagebox.showerror("Error", "Nilai & bobot harus angka!")
+                        messagebox.showerror("Error", "Nilai & Bobot harus berupa angka!")
                         return
 
         if not nilai_list:
             messagebox.showerror("Error", "Tidak ada input kategori.")
             return
 
-        total_bobot = sum(bobot_list)
-        if total_bobot != 100:
-            messagebox.showerror("Error", "Total bobot harus = 100%")
+        if sum(bobot_list) != 100:
+            messagebox.showerror("Error", "Total bobot harus = 100%.")
             return
 
-        # hitung nilai berbobot
         nilai_akhir = sum(n*(b/100) for n,b in zip(nilai_list, bobot_list))
 
         key = (mapel.lower(), nama.lower(), kelas)
@@ -723,6 +802,7 @@ class AplikasiRataMapel:
 
         self.rebuild_heaps_kategori()
         self.update_dropdown_kategori()
+        self.save_kategori_to_csv()
         self.refresh_tabel_kategori()
 
 
@@ -730,59 +810,69 @@ class AplikasiRataMapel:
         if not self.current_selected or self.current_selected[0] != "kategori":
             messagebox.showwarning("Pilih siswa", "Klik baris di tabel kategori untuk memilih data yang ingin diupdate.")
             return
+
         key = self.current_selected[1]
         if key not in self.records_kategori:
             messagebox.showerror("Error", "Data tidak ditemukan.")
             return
 
         nama_baru = self.kat_nama.get().strip()
-        kelas_baru = self.kat_kelas.get().strip()
+        kelas_baru = self.kat_kelas.get().strip().lower()
         mapel_baru = self.kat_mapel.get().strip()
+
         if not nama_baru or not kelas_baru or not mapel_baru:
             messagebox.showerror("Error", "Nama, Kelas, dan Mapel wajib diisi!")
             return
 
         if hasattr(self, "_popup_kategori_list"):
             nilai_baru = list(self._popup_kategori_list)
+            bobot_baru = list(self._popup_bobot_list)
         else:
             nilai_baru = []
-            for entry_nama, entry_nilai in getattr(self, "kategori_entries", []):
-                txt = entry_nilai.get().strip()
-                if txt == "":
-                    continue
-                try:
-                    n = float(txt)
-                    nilai_baru.append(n)
-                except:
-                    messagebox.showerror("Error", "Nilai kategori harus angka 0–100!")
-                    return
-            if not nilai_baru:
-                messagebox.showerror("Error", "Tidak ada nilai kategori! (pakai popup atau input kategori)")
-                return
+            bobot_baru = []
+            for _, en_nilai, en_bobot in getattr(self, "kategori_entries", []):
+                v = en_nilai.get().strip()
+                b = en_bobot.get().strip()
+                if v:
+                    try:
+                        nilai_baru.append(float(v))
+                        bobot_baru.append(float(b))
+                    except:
+                        messagebox.showerror("Error", "Nilai & bobot harus angka!")
+                        return
 
-        rata_baru = sum(nilai_baru) / len(nilai_baru)
+        if not nilai_baru:
+            messagebox.showerror("Error", "Tidak ada input kategori!")
+            return
 
-        # delete old key then insert new
-        try:
-            del self.records_kategori[key]
-        except KeyError:
-            pass
+        if sum(bobot_baru) != 100:
+            messagebox.showerror("Error", "Total bobot harus 100%.")
+            return
+
+        nilai_akhir_baru = sum(n*(b/100) for n,b in zip(nilai_baru, bobot_baru))
+
+        del self.records_kategori[key]
 
         new_key = (mapel_baru.lower(), nama_baru.lower(), kelas_baru)
+
         self.records_kategori[new_key] = {
             "mapel": mapel_baru,
             "nama": nama_baru,
             "kelas": kelas_baru,
-            "nilai": list(nilai_baru),
-            "rata": rata_baru
+            "nilai": nilai_baru,
+            "bobot": bobot_baru,
+            "rata": nilai_akhir_baru
         }
 
         if hasattr(self, "_popup_kategori_list"):
             del self._popup_kategori_list
+            del self._popup_bobot_list
 
         self.rebuild_heaps_kategori()
         self.update_dropdown_kategori()
+        self.save_kategori_to_csv()
         self.refresh_tabel_kategori()
+
         messagebox.showinfo("Berhasil", f"Data {nama_baru} pada mapel {mapel_baru} berhasil diupdate.")
 
     def handle_delete_kategori(self):
@@ -806,7 +896,7 @@ class AplikasiRataMapel:
         self.refresh_tabel_kategori()
         messagebox.showinfo("Berhasil", f"Data {nama} pada mapel {mapel} berhasil dihapus.")
 
-    # ---------------- Helpers: rebuild heaps from records ----------------
+    # Helpers: rebuild heaps from records 
     def rebuild_heaps_rata(self):
         # reset
         self.heap_rata = MaxHeap()
@@ -841,7 +931,6 @@ class AplikasiRataMapel:
                 self.heap_kategori_per_kelas[mapel][kelas] = MaxHeap()
             self.heap_kategori_per_kelas[mapel][kelas].insert(nama, rata, kelas)
 
-    # ---------------- Dropdown / refresh ----------------
     def update_dropdown(self):
         kelas_list = sorted(self.heap_per_kelas.keys())
         self.dropdown_kelas['values'] = kelas_list
@@ -850,23 +939,16 @@ class AplikasiRataMapel:
                 self.kelas_var.set(kelas_list[0])
 
     def update_dropdown_kategori(self):
-            # ambil semua kelas dari heap_kategori_per_kelas
-            kelas_set = set()
-            for mapel in self.heap_kategori_per_kelas:
-                for k in self.heap_kategori_per_kelas[mapel].keys():
-                    kelas_set.add(k)
+        kelas_set = set()
+        for mapel in self.heap_kategori_per_kelas:
+            for k in self.heap_kategori_per_kelas[mapel].keys():
+                kelas_set.add(k.lower())
 
-            # juga tambahkan kelas yang ada di records_rata (mapel/rata-mode)
-            for (nama_lower, kelas) in self.records_rata.keys():
-                if kelas:
-                    kelas_set.add(kelas)
+        kelas_list = sorted(kelas_set)
+        self.dropdown_kelas_kat["values"] = kelas_list
 
-            kelas_list = sorted(kelas_set)
-            self.dropdown_kelas_kat["values"] = kelas_list
-
-            # jika belum ada set pilihan, pilih yang pertama
-            if kelas_list and (self.kat_kelas_var.get() == "" or self.kat_kelas_var.get() not in kelas_list):
-                self.kat_kelas_var.set(kelas_list[0])
+        if kelas_list and (self.kat_kelas_var.get() == "" or self.kat_kelas_var.get() not in kelas_list):
+            self.kat_kelas_var.set(kelas_list[0])
 
 
     def refresh_table(self):
@@ -882,83 +964,160 @@ class AplikasiRataMapel:
             data = self.heap_per_kelas[kelas].get_sorted_data()
 
         for i, s in enumerate(data, start=1):
-            status = "Lulus" if s['nilai'] >= 75 else "Remedial"
-            self.tree.insert("", "end",
-                            values=(i, s['nama'], s['kelas'], f"{s['nilai']:.2f}", status))
+            self.tree.insert(
+                "",
+                "end",
+                values=(
+                    s['nama'],            
+                    s['kelas'],           
+                    f"{s['nilai']:.2f}",  
+                    i                     
+                )
+            )
+
+    def refresh_tabel_lihat(self):
+        for i in self.tree_lihat.get_children():
+            self.tree_lihat.delete(i)
+
+        mode = self.lihat_mode.get()
+
+        if mode == "Global":
+            self.dropdown_lihat_kelas.configure(state="disabled")
+            data = self.heap_rata.get_sorted_data()
+
+        else:  
+            self.dropdown_lihat_kelas.configure(state="readonly")
+            kelas = self.lihat_kelas_var.get()
+            if kelas not in self.heap_per_kelas:
+                return
+            data = self.heap_per_kelas[kelas].get_sorted_data()
+
+        for i, s in enumerate(data, start=1):
+            self.tree_lihat.insert(
+                "",
+                "end",
+                values=(s["nama"], s["kelas"], f"{s['nilai']:.2f}", i)
+            )
+
 
     def refresh_tabel_kategori(self):
         for i in self.tree_kategori.get_children():
             self.tree_kategori.delete(i)
+
         mode = self.mode_kat_var.get()
+
         if mode == "Global":
-            rank = 1
             for mapel, heap in self.heap_kategori_global.items():
+                rank = 1
                 data = heap.get_sorted_data()
+
                 for s in data:
-                    self.tree_kategori.insert("", "end",
-                        values=(mapel, rank, s["nama"], s["kelas"], f"{s['nilai']:.2f}"))
+                    nilai_akhir = s.get("rata", s.get("nilai", 0))
+                    kkm = self.kategori_kkm.get(mapel, 0)
+
+                    status = "Lulus" if nilai_akhir >= kkm else "Remedial"
+
+                    self.tree_kategori.insert(
+                        "",
+                        "end",
+                        values=(mapel, rank, s["nama"], s["kelas"], f"{nilai_akhir:.2f}", status)
+                    )
                     rank += 1
+
         else:
             kelas = self.kat_kelas_var.get()
-            rank = 1
+
             for mapel in self.heap_kategori_per_kelas:
                 if kelas not in self.heap_kategori_per_kelas[mapel]:
                     continue
-                data = self.heap_kategori_per_kelas[mapel][kelas].get_sorted_data()
-                for s in data:
-                    self.tree_kategori.insert("", "end",
-                        values=(mapel, rank, s["nama"], s["kelas"], f"{s['nilai']:.2f}"))
-                    rank += 1
 
-    # ---------------- Table selection handlers ----------------
-    def on_select_rata(self, event):
-        sel = self.tree.selection()
-        if not sel:
-            return
-        vals = self.tree.item(sel[0])["values"]
-        # values: (rank, nama, kelas, nilai, status)
-        nama = vals[1]
-        kelas = vals[2]
-        key = (nama.lower(), kelas)
-        if key in self.records_rata:
-            rec = self.records_rata[key]
-            self.entry_nama.delete(0, tk.END)
-            self.entry_nama.insert(0, rec["nama"])
-            self.entry_kelas.delete(0, tk.END)
-            self.entry_kelas.insert(0, rec["kelas"])
-            # populate mapel_entries cleared (we rely on popup for nilai)
-            for w in getattr(self, "mapel_frame").winfo_children():
-                w.destroy()
-            self.mapel_entries = []
-            # store current selected pointer
-            self.current_selected = ("rata", key)
-            # also cache popup nilai so open_popup can use it
-            self._popup_nilai_list = list(rec["nilai"])
+                rank = 1
+                data = self.heap_kategori_per_kelas[mapel][kelas].get_sorted_data()
+
+                for s in data:
+                    nilai_akhir = s.get("rata", s.get("nilai", 0))
+                    kkm = self.kategori_kkm.get(mapel, 0)
+
+                    status = "Lulus" if nilai_akhir >= kkm else "Remedial"
+
+                    self.tree_kategori.insert(
+                        "",
+                        "end",
+                        values=(mapel, rank, s["nama"], s["kelas"], f"{nilai_akhir:.2f}", status)
+                    )
+                    rank += 1
 
     def on_select_kategori(self, event):
         sel = self.tree_kategori.selection()
         if not sel:
             return
+
         vals = self.tree_kategori.item(sel[0])["values"]
-        # values: (mapel, rank, nama, kelas, nilai)
+
         mapel = vals[0]
         nama = vals[2]
         kelas = vals[3]
-        key = (mapel.lower(), nama.lower(), kelas)
-        if key in self.records_kategori:
-            rec = self.records_kategori[key]
-            self.kat_nama.delete(0, tk.END)
-            self.kat_nama.insert(0, rec["nama"])
-            self.kat_kelas.delete(0, tk.END)
-            self.kat_kelas.insert(0, rec["kelas"])
-            self.kat_mapel.delete(0, tk.END)
-            self.kat_mapel.insert(0, rec["mapel"])
-            # clear kategori_entries
-            for w in getattr(self, "kategori_frame").winfo_children():
-                w.destroy()
-            self.kategori_entries = []
-            self.current_selected = ("kategori", key)
-            self._popup_kategori_list = list(rec["nilai"])
+
+        key = (mapel.lower(), nama.lower(), kelas.lower())
+
+        print("TRY KAT KEY:", key)
+
+        if key not in self.records_kategori:
+            print("KEY KATEGORI TIDAK COCOK:", key)
+            return
+
+        rec = self.records_kategori[key]
+
+        self.kat_nama.delete(0, tk.END)
+        self.kat_nama.insert(0, rec["nama"])
+
+        self.kat_kelas.delete(0, tk.END)
+        self.kat_kelas.insert(0, rec["kelas"])
+
+        self.kat_mapel.delete(0, tk.END)
+        self.kat_mapel.insert(0, rec["mapel"])
+
+        for w in self.kategori_frame.winfo_children():
+            w.destroy()
+        self.kategori_entries = []
+
+        self.current_selected = ("kategori", key)
+
+        self._popup_kategori_list = list(rec["nilai"])
+        self._popup_bobot_list = list(rec["bobot"])
+
+    def on_select_rata(self, event):
+        sel = self.tree.selection()
+        if not sel:
+            return
+
+        vals = self.tree.item(sel[0])["values"]
+
+        nama = vals[0]
+        kelas = vals[1]
+
+        key = (nama.lower(), kelas.lower())       
+        print("TRY RATA KEY:", key)
+
+        if key not in self.records_rata:
+            print("KEY RATA TIDAK COCOK:", key)
+            return
+
+        rec = self.records_rata[key]
+
+        self.entry_nama.delete(0, tk.END)
+        self.entry_nama.insert(0, rec["nama"])
+
+        self.entry_kelas.delete(0, tk.END)
+        self.entry_kelas.insert(0, rec["kelas"])
+
+        for w in self.mapel_frame.winfo_children():
+            w.destroy()
+
+        self.mapel_entries = []
+        self.current_selected = ("rata", key)
+
+        self._popup_nilai_list = list(rec["nilai"])
 
     def on_mode_change(self):
         mode = self.mode_var.get()
@@ -969,15 +1128,105 @@ class AplikasiRataMapel:
         self.refresh_table()
     
     def on_mode_change_kategori(self):
-            mode = self.mode_kat_var.get()
-            if mode == "Global":
-                self.dropdown_kelas_kat.configure(state="disabled")
-            else:
-                self.dropdown_kelas_kat.configure(state="readonly")
-            self.refresh_tabel_kategori()
+        mode = self.mode_kat_var.get()
+        if mode == "Global":
+            self.dropdown_kelas_kat.configure(state="disabled")
+        else:
+            # isi ulang dropdown kelas
+            self.update_dropdown_kategori()
+            kelas_list = list(self.dropdown_kelas_kat["values"])
+            if kelas_list:
+                if self.kat_kelas_var.get() == "" or self.kat_kelas_var.get() not in kelas_list:
+                    self.kat_kelas_var.set(kelas_list[0])
+            self.dropdown_kelas_kat.configure(state="readonly")
+
+        self.refresh_tabel_kategori()
 
 
-# ---------------- MAIN ----------------
+    def save_rata_to_csv(self):
+        with open("keseluruhan_mapel.csv", "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["nama", "kelas", "nilai_list", "rata"])
+            for rec in self.records_rata.values():
+                writer.writerow([
+                    rec["nama"],
+                    rec["kelas"],
+                    ";".join(str(n) for n in rec["nilai"]),
+                    rec["rata"]
+                ])
+
+    def save_kategori_to_csv(self):
+        with open("per_mapel.csv", "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["mapel", "nama", "kelas", "nilai_list", "bobot_list", "rata", "kkm"])
+            for key, rec in self.records_kategori.items():
+                mapel = rec["mapel"]
+                kkm = self.kategori_kkm.get(mapel, 75)
+                writer.writerow([
+                    rec["mapel"],
+                    rec["nama"],
+                    rec["kelas"],
+                    ";".join(str(n) for n in rec["nilai"]),
+                    ";".join(str(b) for b in rec["bobot"]),
+                    rec["rata"],
+                    kkm
+                ])
+
+    def load_rata_from_csv(self):
+        if not os.path.exists("keseluruhan_mapel.csv"):
+            return
+        with open("keseluruhan_mapel.csv", "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                nilai_list = [float(x) for x in row["nilai_list"].split(";")] if row["nilai_list"] else []
+                rata = float(row["rata"])
+                key = (row["nama"].lower(), row["kelas"].lower())
+                self.records_rata[key] = {
+                    "nama": row["nama"],
+                    "kelas": row["kelas"].lower(),
+                    "nilai": nilai_list,
+                    "rata": rata
+                }
+
+    def load_kategori_from_csv(self):
+        if not os.path.exists("per_mapel.csv"):
+            return
+
+        with open("per_mapel.csv", "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                
+                nilai_list = []
+                if row["nilai_list"]:
+                    nilai_list = [float(x) for x in row["nilai_list"].split(";")]
+
+                bobot_list = []
+                if row["bobot_list"]:
+                    bobot_list = [float(x) for x in row["bobot_list"].split(";")]
+
+                rata = float(row["rata"])
+                mapel = row["mapel"]
+
+                nama_lc = row["nama"].lower()
+                kelas_lc = row["kelas"].lower()
+                mapel_lc = mapel.lower()
+
+                key = (mapel_lc, nama_lc, kelas_lc)
+
+                self.records_kategori[key] = {
+                    "mapel": row["mapel"],
+                    "nama": row["nama"],
+                    "kelas": row["kelas"].lower(),
+                    "nilai": nilai_list,
+                    "bobot": bobot_list,
+                    "rata": rata
+                }
+
+                self.kategori_kkm[mapel] = float(row["kkm"])
+
+        self.rebuild_heaps_kategori()
+
+# main
 if __name__ == "__main__":
     root = tk.Tk()
     app = AplikasiRataMapel(root)
