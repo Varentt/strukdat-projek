@@ -208,6 +208,7 @@ class AplikasiRataMapel:
         self.frame_rata = tk.Frame(root, bg="#f0f2f5")
         self.frame_kategori = tk.Frame(root, bg="#f0f2f5")
         self.frame_lihat = tk.Frame(root, bg="#f0f2f5")
+        self.menu_initialized = False
 
         self.show_menu()
 
@@ -231,10 +232,14 @@ class AplikasiRataMapel:
         self.setup_ui_lihat()
 
     def show_menu(self):
-        for f in (self.frame_rata, self.frame_kategori):
+        for f in (self.frame_rata, self.frame_kategori, self.frame_lihat):
             f.pack_forget()
 
+        for widget in self.frame_menu.winfo_children():
+            widget.destroy()
+
         self.frame_menu.pack(fill="both", expand=True)
+
         tk.Label(self.frame_menu,
                 text="Selamat Datang di Sistem Pemeringkatan Nilai Siswa",
                 font=("Segoe UI", 20, "bold"),
@@ -248,12 +253,14 @@ class AplikasiRataMapel:
         tk.Button(self.frame_menu, text="Peringkat Setiap Pelajaran",
                 font=("Segoe UI", 12), width=30,
                 command=self.open_kategori).pack(pady=10)
+
         tk.Button(self.frame_menu, text="Peringkat Seluruh Pelajaran",
                 font=("Segoe UI", 12), width=30,
-                command=self.open_rata_mapel).pack(pady=20)
+                command=self.open_rata_mapel).pack(pady=10)
+
         tk.Button(self.frame_menu, text="Lihat Peringkat",
                 font=("Segoe UI", 12), width=30,
-                command=self.open_lihat_peringkat).pack(pady=10)
+                command=self.open_lihat_peringkat).pack(pady=20)
 
 
     # UI Rata-mapel 
@@ -263,6 +270,8 @@ class AplikasiRataMapel:
 
         header = tk.Frame(self.frame_rata, bg="#343a40", pady=15)
         header.pack(fill="x")
+        ttk.Button(self.frame_rata, text="← Kembali ke Menu",
+                command=self.go_back_to_menu).pack(anchor="w", padx=20, pady=10)
         tk.Label(header, text="Pemeringkatan Berdasarkan Nilai Seluruh Mapel",
                  font=("Segoe UI", 16, "bold"), bg="#343a40", fg="white").pack()
 
@@ -349,15 +358,32 @@ class AplikasiRataMapel:
 
         header = tk.Frame(self.frame_kategori, bg="#343a40", pady=15)
         header.pack(fill="x")
+        ttk.Button(self.frame_kategori, text="← Kembali ke Menu",
+                command=self.go_back_to_menu).pack(anchor="w", padx=20, pady=10)
         tk.Label(header, text="Pemeringkatan Berdasarkan Kategori per Mapel",
                 font=("Segoe UI", 16, "bold"), bg="#343a40", fg="white").pack()
 
         main = tk.Frame(self.frame_kategori, bg="#f0f2f5")
         main.pack(fill="both", expand=True, padx=20, pady=20)
 
-        left = tk.LabelFrame(main, text="Input Nilai per Mapel", bg="white",
-                            font=("Segoe UI", 11, "bold"), padx=15, pady=15)
-        left.pack(side="left", fill="y")
+        # Container scrollable
+        scroll_left_container = tk.Frame(main)
+        scroll_left_container.pack(side="left", fill="both", expand=True, padx=5, pady=5)
+
+        canvas_left = tk.Canvas(scroll_left_container, bg="white", highlightthickness=0)
+        canvas_left.pack(side="left", fill="both", expand=True)
+
+        scrollbar_left = ttk.Scrollbar(scroll_left_container, orient="vertical", command=canvas_left.yview)
+        scrollbar_left.pack(side="right", fill="y")
+
+        canvas_left.configure(yscrollcommand=scrollbar_left.set)
+
+        # Frame asli untuk semua input di kiri
+        left = tk.Frame(canvas_left, bg="white", padx=15, pady=15)
+        canvas_left.create_window((0,0), window=left, anchor="nw")
+
+        # Update scrollregion otomatis
+        left.bind("<Configure>", lambda e: canvas_left.configure(scrollregion=canvas_left.bbox("all")))
 
         tk.Label(left, text="Nama:", bg="white").pack(anchor="w")
         self.kat_nama = ttk.Entry(left, width=25)
@@ -452,6 +478,8 @@ class AplikasiRataMapel:
 
         header = tk.Frame(self.frame_lihat, bg="#343a40", pady=15)
         header.pack(fill="x")
+        ttk.Button(self.frame_lihat, text="← Kembali ke Menu",
+                command=self.go_back_to_menu).pack(anchor="w", padx=20, pady=10)
         tk.Label(header, text="Lihat Peringkat Nilai",
                 font=("Segoe UI", 16, "bold"), bg="#343a40", fg="white").pack()
 
@@ -521,15 +549,26 @@ class AplikasiRataMapel:
             return
 
         self.mapel_entries = []
+
+        # Header kolom
+        header = tk.Frame(self.mapel_frame, bg="white")
+        header.pack(fill="x", pady=(0,5))
+        tk.Label(header, text="Nama Mapel", width=18, bg="white").pack(side="left", padx=5)
+        tk.Label(header, text="Nilai", width=10, bg="white").pack(side="left", padx=5)
+
         for i in range(jumlah):
             row = tk.Frame(self.mapel_frame, bg="white")
             row.pack(fill="x", pady=3)
-            tk.Label(row, text=f"Mapel {i+1}:", bg="white", width=10).pack(side="left")
+
+            # Label urutan mapel
+            tk.Label(row, text=f"{i+1}", width=3, bg="white").pack(side="left")
+
             entry_nama = ttk.Entry(row, width=18)
             entry_nama.pack(side="left", padx=5)
-            entry_nama.insert(0, f"Mapel{i+1}")
+
             entry_nilai = ttk.Entry(row, width=10)
             entry_nilai.pack(side="left", padx=5)
+
             self.mapel_entries.append((entry_nama, entry_nilai))
 
     def generate_kategori_input(self):
@@ -543,22 +582,29 @@ class AplikasiRataMapel:
             return
 
         self.kategori_entries = []
+
+        # Header kolom
+        header = tk.Frame(self.kategori_frame, bg="white")
+        header.pack(fill="x", pady=(0,5))
+        tk.Label(header, text="Nama Kategori", width=15, bg="white").pack(side="left", padx=5)
+        tk.Label(header, text="Nilai", width=8, bg="white").pack(side="left", padx=5)
+        tk.Label(header, text="Bobot %", width=8, bg="white").pack(side="left", padx=5)
+
         for i in range(jumlah):
             baris = tk.Frame(self.kategori_frame, bg="white")
             baris.pack(fill="x", pady=3)
 
-            tk.Label(baris, text=f"Kategori {i+1}:", bg="white").pack(side="left")
+            # Label urutan kategori
+            tk.Label(baris, text=f"{i+1}", width=3, bg="white").pack(side="left")
 
             entry_nama = ttk.Entry(baris, width=15)
             entry_nama.pack(side="left", padx=5)
-            entry_nama.insert(0, f"Kategori{i+1}")
 
             entry_nilai = ttk.Entry(baris, width=8)
             entry_nilai.pack(side="left", padx=5)
 
             entry_bobot = ttk.Entry(baris, width=8)
             entry_bobot.pack(side="left", padx=5)
-            entry_bobot.insert(0, "0")   
 
             self.kategori_entries.append((entry_nama, entry_nilai, entry_bobot))
             
@@ -1132,7 +1178,6 @@ class AplikasiRataMapel:
         if mode == "Global":
             self.dropdown_kelas_kat.configure(state="disabled")
         else:
-            # isi ulang dropdown kelas
             self.update_dropdown_kategori()
             kelas_list = list(self.dropdown_kelas_kat["values"])
             if kelas_list:
@@ -1225,6 +1270,12 @@ class AplikasiRataMapel:
                 self.kategori_kkm[mapel] = float(row["kkm"])
 
         self.rebuild_heaps_kategori()
+
+    def go_back_to_menu(self):
+        self.frame_rata.pack_forget()
+        self.frame_kategori.pack_forget()
+        self.frame_lihat.pack_forget()
+        self.show_menu()
 
 # main
 if __name__ == "__main__":

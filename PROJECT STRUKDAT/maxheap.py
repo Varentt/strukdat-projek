@@ -32,7 +32,6 @@ class MaxHeap:
         nama = nama.lower()
 
         for siswa in self.heap:
-            # hindari duplikat dalam kelas yang sama
             if siswa['nama'].lower() == nama and siswa['kelas'] == kelas:
                 return False
 
